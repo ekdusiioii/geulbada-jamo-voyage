@@ -1,10 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import * as THREE from "three";
 import "./game.css";
-
-type Orb = { id: number; x: number; z: number; char: string; kind: "jamo" | "rock"; bob: number };
-type Spark = { x: number; y: number; vx: number; vy: number; life: number; color: string };
 
 const MISSIONS = [
   { word: "바다", pieces: ["ㅂ", "ㅏ", "ㄷ", "ㅏ"], hint: "넓고 푸른 물결" },
@@ -14,155 +12,104 @@ const MISSIONS = [
   { word: "보물", pieces: ["ㅂ", "ㅗ", "ㅁ", "ㅜ", "ㄹ"], hint: "섬에 숨겨진 반짝이는 것" },
 ];
 
-function useSynth() {
-  const ctx = useRef<AudioContext | null>(null);
-  return useCallback((type: "collect" | "hit" | "complete" | "splash") => {
-    const Ctx = window.AudioContext || (window as typeof window & { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    const ac = ctx.current || (ctx.current = new Ctx());
-    const now = ac.currentTime;
-    const gain = ac.createGain();
-    gain.connect(ac.destination);
-    const notes = type === "complete" ? [523, 659, 784, 1047] : [type === "hit" ? 85 : type === "splash" ? 150 : 660];
-    gain.gain.setValueAtTime(type === "hit" ? 0.16 : 0.1, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + (type === "complete" ? 0.7 : 0.22));
-    notes.forEach((freq, i) => {
-      const osc = ac.createOscillator();
-      osc.type = type === "hit" ? "sawtooth" : type === "splash" ? "triangle" : "sine";
-      osc.frequency.setValueAtTime(freq, now + i * 0.1);
-      osc.connect(gain);
-      osc.start(now + i * 0.1);
-      osc.stop(now + i * 0.1 + 0.18);
-    });
-  }, []);
+type GameObject = { mesh: THREE.Group; kind: "jamo" | "rock"; char: string; hit: boolean };
+type GameState = { x: number; health: number; score: number; streak: number; mission: number; collected: string[]; running: boolean; muted: boolean; speed: number };
+const initialState = (): GameState => ({ x: 0, health: 5, score: 0, streak: 0, mission: 0, collected: [], running: true, muted: false, speed: 0.045 });
+
+function makeJamoTexture(char: string) {
+  const c = document.createElement("canvas"); c.width = c.height = 256;
+  const x = c.getContext("2d")!;
+  const glow = x.createRadialGradient(128, 128, 15, 128, 128, 124);
+  glow.addColorStop(0, "rgba(255,255,220,.98)"); glow.addColorStop(.12, "rgba(80,255,230,.9)");
+  glow.addColorStop(.58, "rgba(8,157,158,.75)"); glow.addColorStop(1, "rgba(2,72,86,0)");
+  x.fillStyle = glow; x.fillRect(0, 0, 256, 256);
+  x.strokeStyle = "rgba(190,255,240,.9)"; x.lineWidth = 5; x.beginPath(); x.arc(128,128,78,0,Math.PI*2); x.stroke();
+  x.fillStyle = "#fff8d1"; x.font = "900 92px sans-serif"; x.textAlign = "center"; x.textBaseline = "middle"; x.shadowColor="#fff";x.shadowBlur=10;x.fillText(char,128,133);
+  const texture = new THREE.CanvasTexture(c); texture.colorSpace = THREE.SRGBColorSpace; return texture;
 }
 
-export default function Home() {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const stateRef = useRef({ x: 0, speed: 0.014, health: 3, score: 0, streak: 0, mission: 0, collected: [] as string[], running: true, muted: false });
-  const orbsRef = useRef<Orb[]>([]);
-  const sparksRef = useRef<Spark[]>([]);
-  const keys = useRef({ left: false, right: false });
-  const [ui, setUi] = useState({ score: 0, health: 3, streak: 0, mission: 0, collected: [] as string[], running: true, toast: "자모를 순서대로 모아 단어를 완성하세요!" });
-  const play = useSynth();
+function makeBoat() {
+  const boat = new THREE.Group();
+  const wood = new THREE.MeshStandardMaterial({ color: 0x6e351f, roughness: .62, metalness: .08 });
+  const rim = new THREE.MeshStandardMaterial({ color: 0xc17a3d, roughness: .48 });
+  const hullGeo = new THREE.BufferGeometry();
+  const v = new Float32Array([-1.7,0,2.6, 1.7,0,2.6, -1.25,0,-2.2, 1.25,0,-2.2, -.7,-1,1.8, .7,-1,1.8, -.5,-.8,-1.8, .5,-.8,-1.8]);
+  const idx=[0,1,4,1,5,4, 0,4,2,2,4,6, 1,3,5,3,7,5, 2,6,3,3,6,7, 4,5,6,5,7,6];
+  hullGeo.setAttribute("position",new THREE.BufferAttribute(v,3)); hullGeo.setIndex(idx); hullGeo.computeVertexNormals();
+  const hull = new THREE.Mesh(hullGeo, wood); hull.castShadow=true; boat.add(hull);
+  const rail = new THREE.Mesh(new THREE.TorusGeometry(1.55,.09,8,28),rim); rail.rotation.x=Math.PI/2;rail.scale.set(1,1.5,1);rail.position.set(0,.12,.2);boat.add(rail);
+  const mast = new THREE.Mesh(new THREE.CylinderGeometry(.075,.1,4.7,12),rim); mast.position.set(0,2.05,.2);mast.castShadow=true;boat.add(mast);
+  const sailMat = new THREE.MeshStandardMaterial({color:0xe85d35,side:THREE.DoubleSide,roughness:.8});
+  const sailGeo = new THREE.BufferGeometry(); sailGeo.setAttribute("position",new THREE.Float32BufferAttribute([-.05,4.2,.2,-.05,.75,.2,-1.75,1.25,.2],3));sailGeo.computeVertexNormals();
+  const sail=new THREE.Mesh(sailGeo,sailMat);sail.castShadow=true;boat.add(sail);
+  const sail2=sail.clone();sail2.material=new THREE.MeshStandardMaterial({color:0xf4ddb0,side:THREE.DoubleSide,roughness:.8});sail2.geometry=new THREE.BufferGeometry();sail2.geometry.setAttribute("position",new THREE.Float32BufferAttribute([.08,4,.2,.08,1,.2,1.45,1.38,.2],3));sail2.geometry.computeVertexNormals();boat.add(sail2);
+  const lamp=new THREE.PointLight(0xffb55b,2.4,7);lamp.position.set(-1,.45,2);boat.add(lamp);
+  const cabin=new THREE.Mesh(new THREE.BoxGeometry(.8,.55,.85),rim);cabin.position.set(0,.35,1.05);cabin.castShadow=true;boat.add(cabin);
+  boat.scale.setScalar(.78); return boat;
+}
 
-  const sync = useCallback((toast?: string) => {
-    const s = stateRef.current;
-    setUi(v => ({ score: s.score, health: s.health, streak: s.streak, mission: s.mission, collected: [...s.collected], running: s.running, toast: toast ?? v.toast }));
-  }, []);
+function useSound() {
+  const ref=useRef<AudioContext|null>(null);
+  return useCallback((type:"collect"|"hit"|"complete")=>{
+    const ac=ref.current||(ref.current=new AudioContext()); const now=ac.currentTime;
+    const notes=type==="complete"?[523,659,784,1047]:[type==="hit"?100:660]; const gain=ac.createGain();gain.connect(ac.destination);
+    gain.gain.setValueAtTime(.1,now);gain.gain.exponentialRampToValueAtTime(.001,now+.65);
+    notes.forEach((n,i)=>{const o=ac.createOscillator();o.type=type==="hit"?"sawtooth":"sine";o.frequency.value=n;o.connect(gain);o.start(now+i*.1);o.stop(now+i*.1+.2)});
+  },[]);
+}
 
-  const restart = useCallback(() => {
-    stateRef.current = { x: 0, speed: 0.014, health: 3, score: 0, streak: 0, mission: 0, collected: [], running: true, muted: false };
-    orbsRef.current = [];
-    sparksRef.current = [];
-    sync("새 항해를 시작합니다. 순서대로 모아보세요!");
-  }, [sync]);
+export default function Home(){
+  const mount=useRef<HTMLDivElement>(null), game=useRef<GameState>(initialState()), objects=useRef<GameObject[]>([]), keys=useRef({left:false,right:false});
+  const [ui,setUi]=useState({...initialState(),toast:"빛나는 자모를 순서대로 모아보세요!"});
+  const sound=useSound();
+  const sync=useCallback((toast?:string)=>{const s=game.current;setUi(v=>({...s,collected:[...s.collected],toast:toast??v.toast}));},[]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent, down: boolean) => {
-      if (["ArrowLeft", "ArrowRight", "a", "d", "A", "D", " "].includes(e.key)) e.preventDefault();
-      if (e.key === "ArrowLeft" || e.key.toLowerCase() === "a") keys.current.left = down;
-      if (e.key === "ArrowRight" || e.key.toLowerCase() === "d") keys.current.right = down;
-      if (e.key === " " && down) { stateRef.current.running = !stateRef.current.running; sync(); }
+  useEffect(()=>{
+    const host=mount.current!; const scene=new THREE.Scene(); scene.background=new THREE.Color(0x163854);scene.fog=new THREE.FogExp2(0x225b6c,.018);
+    const camera=new THREE.PerspectiveCamera(54,host.clientWidth/host.clientHeight,.1,220);camera.position.set(0,7.2,15);camera.lookAt(0,1,-10);
+    const renderer=new THREE.WebGLRenderer({antialias:true,powerPreference:"high-performance"});renderer.setSize(host.clientWidth,host.clientHeight);renderer.setPixelRatio(Math.min(devicePixelRatio,1.7));renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFSoftShadowMap;renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.25;host.appendChild(renderer.domElement);
+    scene.add(new THREE.HemisphereLight(0x9bdcff,0x082338,2.1));const sunLight=new THREE.DirectionalLight(0xffc273,4);sunLight.position.set(-18,25,-35);sunLight.castShadow=true;scene.add(sunLight);
+    const sun=new THREE.Mesh(new THREE.SphereGeometry(4,32,16),new THREE.MeshBasicMaterial({color:0xffc45e}));sun.position.set(-25,18,-95);scene.add(sun);
+    const oceanGeo=new THREE.PlaneGeometry(150,230,70,100);const oceanMat=new THREE.MeshStandardMaterial({color:0x087f91,roughness:.22,metalness:.15,side:THREE.DoubleSide,transparent:true,opacity:.96});
+    const ocean=new THREE.Mesh(oceanGeo,oceanMat);ocean.rotation.x=-Math.PI/2;ocean.position.z=-65;ocean.receiveShadow=true;scene.add(ocean);const base=Float32Array.from((oceanGeo.attributes.position.array as Float32Array));
+    const boat=makeBoat();boat.position.set(0,.65,5);scene.add(boat);
+    const wakeMat=new THREE.MeshBasicMaterial({color:0xb9fff2,transparent:true,opacity:.25,side:THREE.DoubleSide});for(const x of [-.72,.72]){const wake=new THREE.Mesh(new THREE.PlaneGeometry(.12,10),wakeMat);wake.rotation.x=-Math.PI/2;wake.rotation.z=x<0?-.12:.12;wake.position.set(x,.14,10);scene.add(wake)}
+    const islands=new THREE.Group();for(const [x,z,s] of [[-26,-78,8],[25,-92,11],[-42,-120,14],[43,-140,16]] as number[][]){const rock=new THREE.Mesh(new THREE.ConeGeometry(s,s*1.25,7),new THREE.MeshStandardMaterial({color:0x204c4c,roughness:1}));rock.position.set(x,s*.42,z);rock.rotation.y=x;islands.add(rock);const green=new THREE.Mesh(new THREE.ConeGeometry(s*.52,s*.55,7),new THREE.MeshStandardMaterial({color:0x2f7258,roughness:1}));green.position.set(x,s*.92,z);islands.add(green)}scene.add(islands);
+    const particles=new THREE.BufferGeometry();const pts=new Float32Array(360);for(let i=0;i<360;i+=3){pts[i]=(Math.random()-.5)*80;pts[i+1]=Math.random()*18+2;pts[i+2]=-Math.random()*150}particles.setAttribute("position",new THREE.BufferAttribute(pts,3));scene.add(new THREE.Points(particles,new THREE.PointsMaterial({color:0xffd995,size:.12,transparent:true,opacity:.45})));
+    let raf=0,last=performance.now(),spawn=0;
+    const addObject=(kind:"jamo"|"rock",char="")=>{const g=new THREE.Group();
+      if(kind==="jamo"){const sprite=new THREE.Sprite(new THREE.SpriteMaterial({map:makeJamoTexture(char),transparent:true,depthWrite:false,blending:THREE.AdditiveBlending}));sprite.scale.set(4.1,4.1,1);g.add(sprite);const light=new THREE.PointLight(0x52ffe2,2.2,11);g.add(light)}
+      else {const mat=new THREE.MeshStandardMaterial({color:0x263e45,roughness:.95});const rock=new THREE.Mesh(new THREE.DodecahedronGeometry(1.25,0),mat);rock.scale.set(1,1.45,1);rock.rotation.set(.2,Math.random()*3,.15);rock.castShadow=true;g.add(rock);const foam=new THREE.Mesh(new THREE.RingGeometry(1.25,1.8,22),new THREE.MeshBasicMaterial({color:0xb9fff2,transparent:true,opacity:.25,side:THREE.DoubleSide}));foam.rotation.x=-Math.PI/2;foam.position.y=-.85;g.add(foam)}
+      g.position.set((Math.random()-.5)*15,kind==="jamo"?2.2:.65,-82-Math.random()*15);scene.add(g);objects.current.push({mesh:g,kind,char,hit:false});
     };
-    const kd = (e: KeyboardEvent) => onKey(e, true);
-    const ku = (e: KeyboardEvent) => onKey(e, false);
-    window.addEventListener("keydown", kd, { passive: false });
-    window.addEventListener("keyup", ku);
-    return () => { window.removeEventListener("keydown", kd); window.removeEventListener("keyup", ku); };
-  }, [sync]);
-
-  useEffect(() => {
-    const canvas = canvasRef.current!;
-    const ctx = canvas.getContext("2d")!;
-    let raf = 0, last = performance.now(), spawn = 0, wave = 0, id = 0;
-    const resize = () => {
-      const dpr = Math.min(devicePixelRatio, 2);
-      canvas.width = canvas.clientWidth * dpr; canvas.height = canvas.clientHeight * dpr;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-    resize(); window.addEventListener("resize", resize);
-    const burst = (x: number, y: number, color: string) => {
-      for (let i = 0; i < 22; i++) sparksRef.current.push({ x, y, vx: (Math.random() - .5) * 5, vy: -Math.random() * 4, life: 1, color });
-    };
-    const frame = (now: number) => {
-      const dt = Math.min(2, (now - last) / 16.67); last = now;
-      const w = canvas.clientWidth, h = canvas.clientHeight, horizon = h * .34;
-      const s = stateRef.current; wave += .025 * dt;
-      const sky = ctx.createLinearGradient(0, 0, 0, horizon);
-      sky.addColorStop(0, "#071b38"); sky.addColorStop(.55, "#147b9a"); sky.addColorStop(1, "#f4c77a");
-      ctx.fillStyle = sky; ctx.fillRect(0, 0, w, horizon);
-      ctx.fillStyle = "rgba(255,222,151,.85)"; ctx.beginPath(); ctx.arc(w * .78, horizon * .5, Math.min(w,h)*.055, 0, Math.PI*2); ctx.fill();
-      ctx.fillStyle = "rgba(255,240,190,.12)"; ctx.beginPath(); ctx.arc(w * .78, horizon*.5, Math.min(w,h)*.09, 0, Math.PI*2); ctx.fill();
-      ctx.fillStyle = "#063f57"; ctx.beginPath(); ctx.moveTo(w*.05,horizon); ctx.lineTo(w*.18,horizon-28); ctx.lineTo(w*.32,horizon); ctx.fill();
-      ctx.fillStyle = "#0b5364"; ctx.beginPath(); ctx.moveTo(w*.72,horizon); ctx.lineTo(w*.87,horizon-38); ctx.lineTo(w,horizon); ctx.fill();
-      const sea = ctx.createLinearGradient(0,horizon,0,h); sea.addColorStop(0,"#087b96"); sea.addColorStop(1,"#03283f"); ctx.fillStyle=sea; ctx.fillRect(0,horizon,w,h-horizon);
-      for(let row=0; row<14; row++){ const y=horizon+12+row*row*2.3; ctx.strokeStyle=`rgba(125,235,226,${.18+row*.012})`; ctx.lineWidth=1+row*.08; ctx.beginPath(); for(let x=0;x<w+30;x+=30){ctx.lineTo(x,y+Math.sin(x*.025+wave+row)*(.8+row*.16));} ctx.stroke(); }
-      if (s.running && s.health > 0) {
-        if(keys.current.left) s.x -= .035*dt; if(keys.current.right) s.x += .035*dt; s.x=Math.max(-.86,Math.min(.86,s.x));
-        spawn -= dt;
-        if(spawn<=0){
-          const mission=MISSIONS[s.mission%MISSIONS.length], needed=mission.pieces[s.collected.length];
-          orbsRef.current.push({id:id++,x:(Math.random()*1.7)-.85,z:1,char:Math.random()<.72?needed:["ㄱ","ㅅ","ㅜ","ㅣ","ㅈ"][Math.floor(Math.random()*5)],kind:"jamo",bob:Math.random()*6});
-          if(Math.random()<.48) orbsRef.current.push({id:id++,x:(Math.random()*1.7)-.85,z:1.12,char:"",kind:"rock",bob:0});
-          spawn=48+Math.random()*28;
-        }
-        orbsRef.current.forEach(o=>o.z-=s.speed*dt);
-        orbsRef.current = orbsRef.current.filter(o=>{
-          if(o.z<.08){
-            if(Math.abs(o.x-s.x)<.18){
-              const sx=w/2+s.x*w*.36, sy=h*.76;
-              if(o.kind==="rock"){ s.health--; s.streak=0; burst(sx,sy,"#ff7c5c"); if(!s.muted) play("hit"); sync(s.health<=0?"배가 암초에 부딪혔어요! 다시 도전해 보세요.":"암초 조심! 방향을 틀어주세요."); }
-              else {
-                const m=MISSIONS[s.mission%MISSIONS.length], expected=m.pieces[s.collected.length];
-                if(o.char===expected){
-                  s.collected.push(o.char); s.score+=100+s.streak*15; s.streak++; burst(sx,sy,"#ffd76b"); if(!s.muted) play("collect");
-                  if(s.collected.length===m.pieces.length){ s.score+=500+s.streak*30; burst(w/2,h*.42,"#68fff0"); if(!s.muted) play("complete"); s.mission++; s.collected=[]; sync(`“${m.word}” 완성! 다음 섬을 향해 출항!`); }
-                  else sync(`${o.char} 획득! 다음 자모를 찾아보세요.`);
-                } else { s.streak=0; if(!s.muted) play("splash"); sync(`${o.char}은(는) 지금 필요한 자모가 아니에요.`); }
-              }
-            } return false;
-          } return o.z>0;
-        });
+    const onResize=()=>{camera.aspect=host.clientWidth/host.clientHeight;camera.updateProjectionMatrix();renderer.setSize(host.clientWidth,host.clientHeight)};
+    const onKey=(e:KeyboardEvent,d:boolean)=>{if(["ArrowLeft","ArrowRight","a","d","A","D"," "].includes(e.key))e.preventDefault();if(e.key==="ArrowLeft"||e.key.toLowerCase()==="a")keys.current.left=d;if(e.key==="ArrowRight"||e.key.toLowerCase()==="d")keys.current.right=d;if(e.key===" "&&d){game.current.running=!game.current.running;sync()}};
+    const kd=(e:KeyboardEvent)=>onKey(e,true),ku=(e:KeyboardEvent)=>onKey(e,false);window.addEventListener("resize",onResize);window.addEventListener("keydown",kd,{passive:false});window.addEventListener("keyup",ku);
+    const loop=(now:number)=>{const dt=Math.min(2,(now-last)/16.67);last=now;const t=now*.001,s=game.current;
+      const pos=oceanGeo.attributes.position as THREE.BufferAttribute;for(let i=0;i<pos.count;i++){const x=base[i*3],y=base[i*3+1];pos.setZ(i,Math.sin(x*.22+t*1.15)*.22+Math.sin(y*.12+t*.8)*.34)}pos.needsUpdate=true;oceanGeo.computeVertexNormals();
+      if(s.running&&s.health>0){if(keys.current.left)s.x-=.105*dt;if(keys.current.right)s.x+=.105*dt;s.x=Math.max(-7.5,Math.min(7.5,s.x));spawn-=dt;if(spawn<=0){const m=MISSIONS[s.mission%MISSIONS.length],need=m.pieces[s.collected.length];addObject("jamo",Math.random()<.82?need:["ㄱ","ㅅ","ㅜ","ㅣ","ㅈ"][Math.floor(Math.random()*5)]);if(Math.random()<.28)addObject("rock");spawn=180+Math.random()*65}
+        objects.current.forEach(o=>{o.mesh.position.z+=s.speed*dt;o.mesh.rotation.y+=o.kind==="jamo"?.012*dt:.003*dt;if(o.kind==="jamo")o.mesh.position.y=2.25+Math.sin(t*2+o.mesh.id)*.25;
+          if(!o.hit&&o.mesh.position.z>3&&o.mesh.position.z<7){const range=o.kind==="jamo"?1.65:.82;if(Math.abs(o.mesh.position.x-s.x)<range){o.hit=true;if(o.kind==="rock"){s.health--;s.streak=0;if(!s.muted)sound("hit");sync(s.health?"천천히 피하면 괜찮아요. 배가 더 튼튼해졌어요!":"잠시 쉬었다 다시 출항해요.");}
+            else{const m=MISSIONS[s.mission%MISSIONS.length],need=m.pieces[s.collected.length];if(o.char===need){s.collected.push(o.char);s.score+=100;s.streak++;if(!s.muted)sound("collect");if(s.collected.length===m.pieces.length){s.score+=500;s.mission++;s.collected=[];if(!s.muted)sound("complete");sync(`“${m.word}” 완성! 정말 잘했어요!`)}else sync(`${o.char} 획득! 다음은 ${m.pieces[s.collected.length]} 차례예요.`)}else sync("괜찮아요. 빛나는 정답 자모가 다시 나타나요.")}}}});
+        const gone=objects.current.filter(o=>o.mesh.position.z>18);gone.forEach(o=>scene.remove(o.mesh));objects.current=objects.current.filter(o=>o.mesh.position.z<=18);
       }
-      orbsRef.current.sort((a,b)=>b.z-a.z).forEach(o=>{
-        const p=1-o.z, scale=.25+p*1.25, x=w/2+o.x*w*(.12+p*.33), y=horizon+(p*p)*(h-horizon)*.82;
-        if(o.kind==="rock"){ctx.fillStyle="#253c47";ctx.beginPath();ctx.moveTo(x-22*scale,y+12*scale);ctx.lineTo(x-13*scale,y-14*scale);ctx.lineTo(x+8*scale,y-22*scale);ctx.lineTo(x+24*scale,y+12*scale);ctx.fill();ctx.strokeStyle="#4e6970";ctx.stroke();}
-        else { const yy=y+Math.sin(wave*2+o.bob)*5; ctx.shadowColor="#68fff0";ctx.shadowBlur=18*scale;ctx.fillStyle="rgba(16,54,70,.86)";ctx.beginPath();ctx.arc(x,yy,24*scale,0,Math.PI*2);ctx.fill();ctx.strokeStyle="#8fffee";ctx.lineWidth=2;ctx.stroke();ctx.shadowBlur=0;ctx.fillStyle="#fff8d8";ctx.font=`800 ${28*scale}px sans-serif`;ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(o.char,x,yy+1);}
-      });
-      const shipX=w/2+s.x*w*.36, shipY=h*.79+Math.sin(wave*1.7)*3;
-      ctx.save(); ctx.translate(shipX,shipY); ctx.rotate((keys.current.left?-.06:keys.current.right?.06:0));
-      ctx.fillStyle="#5a2d20";ctx.beginPath();ctx.moveTo(-48,-4);ctx.lineTo(43,-4);ctx.lineTo(28,24);ctx.lineTo(-30,28);ctx.closePath();ctx.fill();
-      ctx.fillStyle="#d8a05d";ctx.fillRect(-3,-74,5,72);ctx.fillStyle="#f6e0ad";ctx.beginPath();ctx.moveTo(2,-70);ctx.lineTo(2,-14);ctx.lineTo(42,-25);ctx.closePath();ctx.fill();ctx.fillStyle="#e75b42";ctx.beginPath();ctx.moveTo(-4,-61);ctx.lineTo(-4,-15);ctx.lineTo(-35,-24);ctx.closePath();ctx.fill();ctx.restore();
-      sparksRef.current = sparksRef.current.filter(p=>{p.x+=p.vx*dt;p.y+=p.vy*dt;p.vy+=.12*dt;p.life-=.025*dt;ctx.globalAlpha=Math.max(0,p.life);ctx.fillStyle=p.color;ctx.fillRect(p.x,p.y,3,3);ctx.globalAlpha=1;return p.life>0;});
-      raf=requestAnimationFrame(frame);
-    };
-    raf=requestAnimationFrame(frame);
-    return()=>{cancelAnimationFrame(raf);window.removeEventListener("resize",resize);};
-  }, [play, sync]);
+      boat.position.x+=(s.x-boat.position.x)*.08;boat.position.y=.7+Math.sin(t*1.8)*.12;boat.rotation.z+=(Math.max(-.16,Math.min(.16,(boat.position.x-s.x)*.12))-boat.rotation.z)*.08;boat.rotation.x=Math.sin(t*1.3)*.025;
+      camera.position.x+=(boat.position.x*.3-camera.position.x)*.04;camera.lookAt(boat.position.x*.15,1,-13);renderer.render(scene,camera);raf=requestAnimationFrame(loop)};
+    raf=requestAnimationFrame(loop);
+    return()=>{cancelAnimationFrame(raf);window.removeEventListener("resize",onResize);window.removeEventListener("keydown",kd);window.removeEventListener("keyup",ku);renderer.dispose();host.removeChild(renderer.domElement)};
+  },[sound,sync]);
 
-  const mission = MISSIONS[ui.mission % MISSIONS.length];
-  const hold = (side:"left"|"right", down:boolean) => { keys.current[side]=down; };
-  return (
-    <main className="game-shell">
-      <canvas ref={canvasRef} className="sea-canvas" aria-label="자모를 모으며 항해하는 3D 바다 게임" />
-      <header className="topbar">
-        <div className="brand"><span className="brand-mark">ㅂ</span><div><b>글자바다</b><small>JAMO VOYAGE</small></div></div>
-        <div className="stats"><span><i>점수</i><b>{ui.score.toLocaleString()}</b></span><span><i>연속</i><b>× {ui.streak}</b></span><span className="hearts" aria-label={`남은 배 ${ui.health}척`}>{[0,1,2].map(n=><b key={n} className={n<ui.health?"on":""}>♥</b>)}</span></div>
-        <button className="sound" onClick={()=>{stateRef.current.muted=!stateRef.current.muted;setUi(v=>({...v}))}} aria-label="소리 켜기 또는 끄기">{stateRef.current.muted?"소리 끔":"♪ 소리 켬"}</button>
-      </header>
-      <section className="mission-card">
-        <div className="mission-kicker">항해 목표 · {ui.mission+1}번째 섬</div>
-        <div className="mission-row"><div><h1>{mission.word}</h1><p>{mission.hint}</p></div><div className="slots">{mission.pieces.map((p,i)=><span key={i} className={i<ui.collected.length?"filled":i===ui.collected.length?"next":""}>{ui.collected[i]||p}</span>)}</div></div>
-      </section>
-      <div className="toast">{ui.toast}</div>
-      <div className="legend"><span><i className="orb-dot"/>자모 수집</span><span><i className="rock-dot"/>암초 회피</span></div>
-      <div className="controls">
-        <button onPointerDown={()=>hold("left",true)} onPointerUp={()=>hold("left",false)} onPointerLeave={()=>hold("left",false)} aria-label="왼쪽으로 항해">←<small>A</small></button>
-        <button className="pause" onClick={()=>{stateRef.current.running=!stateRef.current.running;sync(stateRef.current.running?"다시 항해합니다!":"잠시 닻을 내렸어요.");}} aria-label="일시 정지">{ui.running?"Ⅱ":"▶"}</button>
-        <button onPointerDown={()=>hold("right",true)} onPointerUp={()=>hold("right",false)} onPointerLeave={()=>hold("right",false)} aria-label="오른쪽으로 항해">→<small>D</small></button>
-      </div>
-      {!ui.running && ui.health>0 && <div className="overlay"><div><span>⚓</span><h2>잠시 정박 중</h2><p>스페이스바나 아래 버튼으로 항해를 이어가세요.</p><button onClick={()=>{stateRef.current.running=true;sync("다시 항해합니다!");}}>계속 항해</button></div></div>}
-      {ui.health<=0 && <div className="overlay"><div><span>🌊</span><h2>항해 종료</h2><p><b>{ui.score.toLocaleString()}점</b>을 기록했어요. 다시 바람을 타볼까요?</p><button onClick={restart}>다시 출항</button></div></div>}
-    </main>
-  );
+  const mission=MISSIONS[ui.mission%MISSIONS.length];const hold=(side:"left"|"right",on:boolean)=>{keys.current[side]=on};
+  const restart=()=>{objects.current.forEach(o=>o.mesh.parent?.remove(o.mesh));objects.current=[];game.current=initialState();sync("천천히 다시 출항해 볼까요?")};
+  return <main className="game-shell">
+    <div ref={mount} className="three-stage" aria-label="자모를 모으며 항해하는 실제 3D 바다 게임"/>
+    <div className="vignette"/>
+    <header className="topbar"><div className="brand"><span className="brand-mark">ㅂ</span><div><b>글자바다</b><small>JAMO VOYAGE</small></div></div><div className="stats"><span><i>점수</i><b>{ui.score.toLocaleString()}</b></span><span><i>연속 성공</i><b>× {ui.streak}</b></span><span className="hearts" aria-label={`남은 기회 ${ui.health}개`}>{[0,1,2,3,4].map(n=><b key={n} className={n<ui.health?"on":""}>♥</b>)}</span></div><button className="sound" onClick={()=>{game.current.muted=!game.current.muted;sync()}}>{ui.muted?"소리 끔":"♪ 소리 켬"}</button></header>
+    <section className="mission-card"><div className="mission-kicker">오늘의 항해 · {ui.mission+1}번째 단어</div><div className="mission-row"><div><h1>{mission.word}</h1><p>{mission.hint}</p></div><div className="slots">{mission.pieces.map((p,i)=><span key={i} className={i<ui.collected.length?"filled":i===ui.collected.length?"next":""}>{i<ui.collected.length?ui.collected[i]:p}</span>)}</div></div><div className="next-guide">다음에 모을 자모 <strong>{mission.pieces[ui.collected.length]}</strong></div></section>
+    <aside className="teacher-panel"><span>편안한 항해</span><label>속도<select value={ui.speed} onChange={e=>{game.current.speed=Number(e.target.value);sync()}}><option value=".03">아주 천천히</option><option value=".045">천천히</option><option value=".065">보통</option></select></label><small>틀려도 감점하지 않아요</small></aside>
+    <div className="toast" role="status">{ui.toast}</div>
+    <div className="controls"><button onPointerDown={()=>hold("left",true)} onPointerUp={()=>hold("left",false)} onPointerCancel={()=>hold("left",false)} aria-label="왼쪽으로 이동"><span>←</span><small>왼쪽</small></button><button className="pause" onClick={()=>{game.current.running=!game.current.running;sync(game.current.running?"다시 천천히 출항합니다.":"잠시 쉬어가도 괜찮아요.")}}>{ui.running?"Ⅱ":"▶"}<small>{ui.running?"쉬기":"계속"}</small></button><button onPointerDown={()=>hold("right",true)} onPointerUp={()=>hold("right",false)} onPointerCancel={()=>hold("right",false)} aria-label="오른쪽으로 이동"><span>→</span><small>오른쪽</small></button></div>
+    {!ui.running&&ui.health>0&&<div className="overlay"><div><span>⚓</span><h2>잠시 쉬는 중</h2><p>준비되면 다시 시작해요. 서두르지 않아도 괜찮습니다.</p><button onClick={()=>{game.current.running=true;sync("다시 천천히 출항합니다.")}}>계속 항해하기</button></div></div>}
+    {ui.health<=0&&<div className="overlay"><div><span>🌊</span><h2>멋진 항해였어요</h2><p><b>{ui.score.toLocaleString()}점</b>을 모았어요. 다시 도전해 볼까요?</p><button onClick={restart}>다시 출항하기</button></div></div>}
+  </main>
 }
