@@ -14,38 +14,52 @@ const MISSIONS = [
 
 type GameObject = { mesh: THREE.Group; kind: "jamo" | "rock"; char: string; hit: boolean };
 type GameState = { x: number; health: number; score: number; streak: number; mission: number; collected: string[]; running: boolean; muted: boolean; speed: number };
-const initialState = (): GameState => ({ x: 0, health: 5, score: 0, streak: 0, mission: 0, collected: [], running: true, muted: false, speed: 0.045 });
+const initialState = (): GameState => ({ x: 0, health: 5, score: 0, streak: 0, mission: 0, collected: [], running: true, muted: false, speed: 0.08 });
 
 function makeJamoTexture(char: string) {
   const c = document.createElement("canvas"); c.width = c.height = 256;
   const x = c.getContext("2d")!;
-  const glow = x.createRadialGradient(128, 128, 15, 128, 128, 124);
-  glow.addColorStop(0, "rgba(255,255,220,.98)"); glow.addColorStop(.12, "rgba(80,255,230,.9)");
-  glow.addColorStop(.58, "rgba(8,157,158,.75)"); glow.addColorStop(1, "rgba(2,72,86,0)");
+  const glow = x.createRadialGradient(128, 128, 18, 128, 128, 126);
+  glow.addColorStop(0, "rgba(255,252,220,1)"); glow.addColorStop(.58, "rgba(255,246,195,1)");
+  glow.addColorStop(.61, "rgba(35,104,110,1)"); glow.addColorStop(.72, "rgba(95,255,224,.95)"); glow.addColorStop(1, "rgba(2,72,86,0)");
   x.fillStyle = glow; x.fillRect(0, 0, 256, 256);
-  x.strokeStyle = "rgba(190,255,240,.9)"; x.lineWidth = 5; x.beginPath(); x.arc(128,128,78,0,Math.PI*2); x.stroke();
-  x.fillStyle = "#fff8d1"; x.font = "900 92px sans-serif"; x.textAlign = "center"; x.textBaseline = "middle"; x.shadowColor="#fff";x.shadowBlur=10;x.fillText(char,128,133);
+  x.strokeStyle = "#123f4a"; x.lineWidth = 10; x.beginPath(); x.arc(128,128,76,0,Math.PI*2); x.stroke();
+  x.font = "900 112px 'Arial Black',sans-serif"; x.textAlign = "center"; x.textBaseline = "middle";
+  x.lineJoin="round";x.strokeStyle="#092d39";x.lineWidth=14;x.strokeText(char,128,135);
+  x.fillStyle = "#ffffff";x.shadowColor="#fff";x.shadowBlur=3;x.fillText(char,128,135);
   const texture = new THREE.CanvasTexture(c); texture.colorSpace = THREE.SRGBColorSpace; return texture;
 }
 
 function makeBoat() {
   const boat = new THREE.Group();
-  const wood = new THREE.MeshStandardMaterial({ color: 0x6e351f, roughness: .62, metalness: .08 });
-  const rim = new THREE.MeshStandardMaterial({ color: 0xc17a3d, roughness: .48 });
+  const wood = new THREE.MeshStandardMaterial({ color: 0x5b2918, roughness: .58, metalness: .06 });
+  const rim = new THREE.MeshStandardMaterial({ color: 0xd18a43, roughness: .42 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x28150f, roughness: .7 });
+  const gold = new THREE.MeshStandardMaterial({ color: 0xf2b84f, roughness: .3, metalness: .45 });
+  const add=(geo:THREE.BufferGeometry,mat:THREE.Material,pos:[number,number,number],rot:[number,number,number]=[0,0,0])=>{const m=new THREE.Mesh(geo,mat);m.position.set(...pos);m.rotation.set(...rot);m.castShadow=true;m.receiveShadow=true;boat.add(m);return m};
   const hullGeo = new THREE.BufferGeometry();
   const v = new Float32Array([-1.7,0,2.6, 1.7,0,2.6, -1.25,0,-2.2, 1.25,0,-2.2, -.7,-1,1.8, .7,-1,1.8, -.5,-.8,-1.8, .5,-.8,-1.8]);
   const idx=[0,1,4,1,5,4, 0,4,2,2,4,6, 1,3,5,3,7,5, 2,6,3,3,6,7, 4,5,6,5,7,6];
   hullGeo.setAttribute("position",new THREE.BufferAttribute(v,3)); hullGeo.setIndex(idx); hullGeo.computeVertexNormals();
-  const hull = new THREE.Mesh(hullGeo, wood); hull.castShadow=true; boat.add(hull);
-  const rail = new THREE.Mesh(new THREE.TorusGeometry(1.55,.09,8,28),rim); rail.rotation.x=Math.PI/2;rail.scale.set(1,1.5,1);rail.position.set(0,.12,.2);boat.add(rail);
-  const mast = new THREE.Mesh(new THREE.CylinderGeometry(.075,.1,4.7,12),rim); mast.position.set(0,2.05,.2);mast.castShadow=true;boat.add(mast);
+  const hull = add(hullGeo,wood,[0,0,0]); hull.scale.set(1.08,1,1.1);
+  add(new THREE.BoxGeometry(2.35,.16,3.75),rim,[0,.02,.15]);
+  for(let z=-1.45;z<=1.45;z+=.48)add(new THREE.BoxGeometry(2.28,.035,.035),dark,[0,.12,z]);
+  for(const side of [-1,1]){add(new THREE.CylinderGeometry(.055,.055,3.9,8),rim,[side*1.28,.48,.1],[Math.PI/2,0,0]);for(let z=-1.55;z<=1.55;z+=.78)add(new THREE.CylinderGeometry(.04,.05,.55,8),rim,[side*1.28,.25,z])}
+  const mast = add(new THREE.CylinderGeometry(.08,.12,5.2,14),rim,[0,2.35,.05]);
   const sailMat = new THREE.MeshStandardMaterial({color:0xe85d35,side:THREE.DoubleSide,roughness:.8});
-  const sailGeo = new THREE.BufferGeometry(); sailGeo.setAttribute("position",new THREE.Float32BufferAttribute([-.05,4.2,.2,-.05,.75,.2,-1.75,1.25,.2],3));sailGeo.computeVertexNormals();
+  const sailGeo = new THREE.BufferGeometry(); sailGeo.setAttribute("position",new THREE.Float32BufferAttribute([-.05,4.7,.05,-.05,.8,.05,-2.05,1.28,.05],3));sailGeo.computeVertexNormals();
   const sail=new THREE.Mesh(sailGeo,sailMat);sail.castShadow=true;boat.add(sail);
-  const sail2=sail.clone();sail2.material=new THREE.MeshStandardMaterial({color:0xf4ddb0,side:THREE.DoubleSide,roughness:.8});sail2.geometry=new THREE.BufferGeometry();sail2.geometry.setAttribute("position",new THREE.Float32BufferAttribute([.08,4,.2,.08,1,.2,1.45,1.38,.2],3));sail2.geometry.computeVertexNormals();boat.add(sail2);
-  const lamp=new THREE.PointLight(0xffb55b,2.4,7);lamp.position.set(-1,.45,2);boat.add(lamp);
-  const cabin=new THREE.Mesh(new THREE.BoxGeometry(.8,.55,.85),rim);cabin.position.set(0,.35,1.05);cabin.castShadow=true;boat.add(cabin);
-  boat.scale.setScalar(.78); return boat;
+  const sail2=sail.clone();sail2.material=new THREE.MeshStandardMaterial({color:0xf5dfb5,side:THREE.DoubleSide,roughness:.78});sail2.geometry=new THREE.BufferGeometry();sail2.geometry.setAttribute("position",new THREE.Float32BufferAttribute([.08,4.5,.05,.08,1,.05,1.7,1.38,.05],3));sail2.geometry.computeVertexNormals();boat.add(sail2);
+  add(new THREE.CylinderGeometry(.045,.045,3.8,8),dark,[-1.05,2.65,.08],[-.43,0,0]);
+  add(new THREE.CylinderGeometry(.045,.045,3.6,8),dark,[.89,2.6,.08],[.47,0,0]);
+  add(new THREE.BoxGeometry(1.15,.68,.95),rim,[0,.48,1.05]);add(new THREE.BoxGeometry(1.3,.12,1.08),dark,[0,.88,1.05]);
+  for(const x of [-.34,.34])add(new THREE.BoxGeometry(.25,.27,.025),new THREE.MeshStandardMaterial({color:0xffd56e,emissive:0x7a3b08,emissiveIntensity:1.4}),[x,.53,1.54]);
+  const wheel=add(new THREE.TorusGeometry(.43,.055,8,20),gold,[0,1.12,.12],[Math.PI/2,0,0]);for(let a=0;a<Math.PI;a+=Math.PI/3){const spoke=add(new THREE.CylinderGeometry(.025,.025,.85,6),gold,[0,1.12,.12],[Math.PI/2,a,0]);spoke.rotation.z=a}
+  for(const x of [-.76,.76]){add(new THREE.CylinderGeometry(.32,.36,.55,12),dark,[x,.43,-.85]);add(new THREE.TorusGeometry(.34,.035,6,16),gold,[x,.48,-.85],[Math.PI/2,0,0])}
+  const flagPole=add(new THREE.CylinderGeometry(.035,.045,1.65,8),rim,[0,5.65,.05]);const flagGeo=new THREE.BufferGeometry();flagGeo.setAttribute("position",new THREE.Float32BufferAttribute([0,6.35,.05,0,5.72,.05,1.05,6.03,.05],3));flagGeo.computeVertexNormals();add(flagGeo,sailMat,[0,0,0]);
+  const lamp=new THREE.PointLight(0xffb55b,3,8);lamp.position.set(-1,.65,2);boat.add(lamp);add(new THREE.SphereGeometry(.12,10,8),new THREE.MeshStandardMaterial({color:0xffd36b,emissive:0xff8a20,emissiveIntensity:2}),[-1,.65,2]);
+  add(new THREE.ConeGeometry(.22,.65,12),gold,[0,-.18,2.95],[Math.PI/2,0,0]);
+  boat.scale.setScalar(.82); return boat;
 }
 
 function useSound() {
@@ -78,7 +92,7 @@ export default function Home(){
     const particles=new THREE.BufferGeometry();const pts=new Float32Array(360);for(let i=0;i<360;i+=3){pts[i]=(Math.random()-.5)*80;pts[i+1]=Math.random()*18+2;pts[i+2]=-Math.random()*150}particles.setAttribute("position",new THREE.BufferAttribute(pts,3));scene.add(new THREE.Points(particles,new THREE.PointsMaterial({color:0xffd995,size:.12,transparent:true,opacity:.45})));
     let raf=0,last=performance.now(),spawn=0;
     const addObject=(kind:"jamo"|"rock",char="")=>{const g=new THREE.Group();
-      if(kind==="jamo"){const sprite=new THREE.Sprite(new THREE.SpriteMaterial({map:makeJamoTexture(char),transparent:true,depthWrite:false,blending:THREE.AdditiveBlending}));sprite.scale.set(4.1,4.1,1);g.add(sprite);const light=new THREE.PointLight(0x52ffe2,2.2,11);g.add(light)}
+      if(kind==="jamo"){const sprite=new THREE.Sprite(new THREE.SpriteMaterial({map:makeJamoTexture(char),transparent:true,depthWrite:false,depthTest:true,blending:THREE.NormalBlending}));sprite.scale.set(5.3,5.3,1);g.add(sprite);const light=new THREE.PointLight(0x52ffe2,1.5,9);g.add(light)}
       else {const mat=new THREE.MeshStandardMaterial({color:0x263e45,roughness:.95});const rock=new THREE.Mesh(new THREE.DodecahedronGeometry(1.25,0),mat);rock.scale.set(1,1.45,1);rock.rotation.set(.2,Math.random()*3,.15);rock.castShadow=true;g.add(rock);const foam=new THREE.Mesh(new THREE.RingGeometry(1.25,1.8,22),new THREE.MeshBasicMaterial({color:0xb9fff2,transparent:true,opacity:.25,side:THREE.DoubleSide}));foam.rotation.x=-Math.PI/2;foam.position.y=-.85;g.add(foam)}
       g.position.set((Math.random()-.5)*15,kind==="jamo"?2.2:.65,-82-Math.random()*15);scene.add(g);objects.current.push({mesh:g,kind,char,hit:false});
     };
@@ -106,7 +120,7 @@ export default function Home(){
     <div className="vignette"/>
     <header className="topbar"><div className="brand"><span className="brand-mark">ㅂ</span><div><b>글자바다</b><small>JAMO VOYAGE</small></div></div><div className="stats"><span><i>점수</i><b>{ui.score.toLocaleString()}</b></span><span><i>연속 성공</i><b>× {ui.streak}</b></span><span className="hearts" aria-label={`남은 기회 ${ui.health}개`}>{[0,1,2,3,4].map(n=><b key={n} className={n<ui.health?"on":""}>♥</b>)}</span></div><button className="sound" onClick={()=>{game.current.muted=!game.current.muted;sync()}}>{ui.muted?"소리 끔":"♪ 소리 켬"}</button></header>
     <section className="mission-card"><div className="mission-kicker">오늘의 항해 · {ui.mission+1}번째 단어</div><div className="mission-row"><div><h1>{mission.word}</h1><p>{mission.hint}</p></div><div className="slots">{mission.pieces.map((p,i)=><span key={i} className={i<ui.collected.length?"filled":i===ui.collected.length?"next":""}>{i<ui.collected.length?ui.collected[i]:p}</span>)}</div></div><div className="next-guide">다음에 모을 자모 <strong>{mission.pieces[ui.collected.length]}</strong></div></section>
-    <aside className="teacher-panel"><span>편안한 항해</span><label>속도<select value={ui.speed} onChange={e=>{game.current.speed=Number(e.target.value);sync()}}><option value=".03">아주 천천히</option><option value=".045">천천히</option><option value=".065">보통</option></select></label><small>틀려도 감점하지 않아요</small></aside>
+    <aside className="teacher-panel"><span>편안한 항해</span><label>속도<select aria-label="항해 속도" value={String(ui.speed)} onChange={e=>{const speed=parseFloat(e.currentTarget.value);game.current.speed=speed;sync(speed===.045?"아주 천천히 항해합니다.":speed===.08?"천천히 항해합니다.":"보통 속도로 항해합니다.")}}><option value="0.045">아주 천천히</option><option value="0.08">천천히</option><option value="0.14">보통</option></select></label><b className="speed-now">{ui.speed===.045?"거북이 속도":ui.speed===.08?"산책 속도":"씽씽 속도"}</b><small>틀려도 감점하지 않아요</small></aside>
     <div className="toast" role="status">{ui.toast}</div>
     <div className="controls"><button onPointerDown={()=>hold("left",true)} onPointerUp={()=>hold("left",false)} onPointerCancel={()=>hold("left",false)} aria-label="왼쪽으로 이동"><span>←</span><small>왼쪽</small></button><button className="pause" onClick={()=>{game.current.running=!game.current.running;sync(game.current.running?"다시 천천히 출항합니다.":"잠시 쉬어가도 괜찮아요.")}}>{ui.running?"Ⅱ":"▶"}<small>{ui.running?"쉬기":"계속"}</small></button><button onPointerDown={()=>hold("right",true)} onPointerUp={()=>hold("right",false)} onPointerCancel={()=>hold("right",false)} aria-label="오른쪽으로 이동"><span>→</span><small>오른쪽</small></button></div>
     {!ui.running&&ui.health>0&&<div className="overlay"><div><span>⚓</span><h2>잠시 쉬는 중</h2><p>준비되면 다시 시작해요. 서두르지 않아도 괜찮습니다.</p><button onClick={()=>{game.current.running=true;sync("다시 천천히 출항합니다.")}}>계속 항해하기</button></div></div>}
