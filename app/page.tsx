@@ -73,6 +73,7 @@ function useSound() {
 
 export default function Home(){
   const mount=useRef<HTMLDivElement>(null), game=useRef<GameState>(initialState()), objects=useRef<GameObject[]>([]), keys=useRef({left:false,right:false});
+  const startAudio=useRef<()=>void>(()=>{});
   const [ui,setUi]=useState({...initialState(),toast:"빛나는 자모를 순서대로 모아보세요!"});
   const [flights,setFlights]=useState<Flight[]>([]);
   const [impactFx,setImpactFx]=useState(0),[mistakeFx,setMistakeFx]=useState<{id:number;char:string;need:string}|null>(null);
@@ -87,13 +88,14 @@ export default function Home(){
   },[]);
 
   useEffect(()=>{
-    let ac:AudioContext|null=null,master:GainNode|null=null,timer=0;
-    const startAmbient=()=>{if(ac)return;ac=new AudioContext();setAudioReady(true);master=ac.createGain();master.gain.value=game.current.muted?0:.58;master.connect(ac.destination);
-      const music=ac.createGain(),musicFilter=ac.createBiquadFilter();music.gain.value=.048;musicFilter.type="lowpass";musicFilter.frequency.value=1050;music.connect(musicFilter).connect(master);[73.42,146.83,220,293.66,369.99].forEach((freq,i)=>{const osc=ac!.createOscillator(),gain=ac!.createGain();osc.type=i<2?"sine":"triangle";osc.frequency.value=freq;gain.gain.value=i===0?.34:i===1?.22:.1;osc.detune.value=(i-2)*2.5;osc.connect(gain).connect(music);osc.start()});const musicSwell=ac.createOscillator(),musicSwellGain=ac.createGain();musicSwell.frequency.value=.055;musicSwellGain.gain.value=.014;musicSwell.connect(musicSwellGain).connect(music.gain);musicSwell.start();
+    let ac:AudioContext|null=null,master:GainNode|null=null,timer=0,chordTimer=0;
+    const startAmbient=async()=>{if(ac){if(ac.state==="suspended")await ac.resume();setAudioReady(ac.state==="running");return}ac=new AudioContext();master=ac.createGain();master.gain.value=game.current.muted?0:.68;master.connect(ac.destination);
+      const music=ac.createGain(),musicFilter=ac.createBiquadFilter(),tones:OscillatorNode[]=[];music.gain.value=.12;musicFilter.type="lowpass";musicFilter.frequency.value=1550;music.connect(musicFilter).connect(master);const intervals=[1,2,3,4,5.04];intervals.forEach((ratio,i)=>{const osc=ac!.createOscillator(),gain=ac!.createGain();osc.type=i<2?"sine":"triangle";osc.frequency.value=73.42*ratio;gain.gain.value=i===0?.28:i===1?.2:.075;osc.detune.value=(i-2)*2;osc.connect(gain).connect(music);osc.start();tones.push(osc)});const musicSwell=ac.createOscillator(),musicSwellGain=ac.createGain();musicSwell.frequency.value=.06;musicSwellGain.gain.value=.025;musicSwell.connect(musicSwellGain).connect(music.gain);musicSwell.start();const roots=[73.42,87.31,65.41,98];let chord=0;chordTimer=window.setInterval(()=>{if(!ac)return;chord=(chord+1)%roots.length;tones.forEach((osc,i)=>osc.frequency.setTargetAtTime(roots[chord]*intervals[i],ac!.currentTime,1.25))},5200);
       const waveBuffer=ac.createBuffer(1,ac.sampleRate*4,ac.sampleRate),data=waveBuffer.getChannelData(0);let last=0;for(let i=0;i<data.length;i++){last=last*.985+(Math.random()*2-1)*.015;data[i]=last}const waves=ac.createBufferSource(),filter=ac.createBiquadFilter(),waveGain=ac.createGain();waves.buffer=waveBuffer;waves.loop=true;filter.type="lowpass";filter.frequency.value=720;waveGain.gain.value=.12;waves.connect(filter).connect(waveGain).connect(master);waves.start();const swell=ac.createOscillator(),swellGain=ac.createGain();swell.frequency.value=.12;swellGain.gain.value=.055;swell.connect(swellGain).connect(waveGain.gain);swell.start();
-      timer=window.setInterval(()=>{if(ac&&master)master.gain.setTargetAtTime(game.current.muted?0:.58,ac.currentTime,.12)},160)};
+      timer=window.setInterval(()=>{if(ac&&master)master.gain.setTargetAtTime(game.current.muted?0:.68,ac.currentTime,.12)},160);await ac.resume();setAudioReady(ac.state==="running")};
+    startAudio.current=()=>{void startAmbient()};
     window.addEventListener("pointerdown",startAmbient,{once:true});window.addEventListener("keydown",startAmbient,{once:true});
-    return()=>{window.removeEventListener("pointerdown",startAmbient);window.removeEventListener("keydown",startAmbient);if(timer)clearInterval(timer);ac?.close()};
+    return()=>{window.removeEventListener("pointerdown",startAmbient);window.removeEventListener("keydown",startAmbient);if(timer)clearInterval(timer);if(chordTimer)clearInterval(chordTimer);ac?.close()};
   },[]);
 
   useEffect(()=>{
@@ -163,7 +165,7 @@ export default function Home(){
   return <main className="game-shell">
     <div ref={mount} className="three-stage" aria-label="자모를 모으며 항해하는 실제 3D 바다 게임"/>
     <div className="vignette"/>
-    {!audioReady&&!ui.muted&&<div className="audio-cue"><span>♪</span> 화면을 누르면 음악과 파도 소리가 시작돼요</div>}
+    {!audioReady&&!ui.muted&&<button className="audio-cue" onClick={()=>startAudio.current()}><span>♪</span> 음악과 파도 소리 시작하기</button>}
     {impactFx>0&&<div key={`soft-impact-${impactFx}`} className="soft-impact"><i/><i/><i/><i/></div>}
     {mistakeFx&&<div key={mistakeFx.id} className="gentle-mistake"><b>{mistakeFx.char}</b><span>순서가 달라요 · 다음은 {mistakeFx.need}</span></div>}
     <header className="topbar"><div className="brand"><span className="brand-mark">ㅂ</span><div><b>글자바다</b><small>JAMO VOYAGE</small></div></div><div className="stats"><span><i>점수</i><b>{ui.score.toLocaleString()}</b></span><span><i>연속 성공</i><b>× {ui.streak}</b></span><span className="hearts" aria-label={`남은 기회 ${ui.health}개`}>{[0,1,2,3,4].map(n=><b key={n} className={n<ui.health?"on":""}>♥</b>)}</span></div><button className="sound" onClick={()=>{game.current.muted=!game.current.muted;sync()}}>{ui.muted?"소리 끔":"♪ 소리 켬"}</button></header>
