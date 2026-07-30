@@ -109,12 +109,15 @@ function useSound() {
 }
 
 export default function Home(){
-  const mount=useRef<HTMLDivElement>(null), game=useRef<GameState>(initialState()), objects=useRef<GameObject[]>([]), keys=useRef({left:false,right:false});
+  const mount=useRef<HTMLDivElement>(null), game=useRef<GameState>(initialState()), objects=useRef<GameObject[]>([]), keys=useRef({left:false,right:false}),playerRef=useRef<string|null>(null);
   const startAudio=useRef<()=>void>(()=>{});
   const [ui,setUi]=useState({...initialState(),toast:"빛나는 자모를 순서대로 모아보세요!"});
   const [flights,setFlights]=useState<Flight[]>([]);
   const [impactFx,setImpactFx]=useState(0),[mistakeFx,setMistakeFx]=useState<{id:number;char:string;need:string}|null>(null);
   const [audioReady,setAudioReady]=useState(false);
+  const [nicknameInput,setNicknameInput]=useState(""),[nickname,setNickname]=useState<string|null>(null);
+  const [bestScore,setBestScore]=useState(0);
+  const [loginBusy,setLoginBusy]=useState(false),[loginError,setLoginError]=useState("");
   const sound=useSound();
   const sync=useCallback((toast?:string)=>{const s=game.current;setUi(v=>({...s,collected:[...s.collected],toast:toast??v.toast}));},[]);
   const launchGlyph=useCallback((char:string,index:number,world:THREE.Vector3,camera:THREE.Camera,host:HTMLElement)=>{
@@ -123,6 +126,17 @@ export default function Home(){
     const tx=slot?slot.left+slot.width/2:innerWidth/2,ty=slot?slot.top+slot.height/2:110;
     setFlights(v=>[...v,{id:Date.now()+Math.random(),char,sx,sy,tx,ty}]);
   },[]);
+
+  useEffect(()=>{
+    if(!nickname)return;
+    const timer=window.setTimeout(()=>{
+      fetch("/api/scores",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({nickname,score:ui.score})})
+        .then(async response=>{if(!response.ok)throw new Error();return response.json()})
+        .then(data=>{if(data.player)setBestScore(data.player.best_score)})
+        .catch(()=>{});
+    },450);
+    return()=>window.clearTimeout(timer);
+  },[nickname,ui.score]);
 
   useEffect(()=>{
     let ac:AudioContext|null=null,master:GainNode|null=null,timer=0,bgmSource:AudioBufferSourceNode|null=null;
@@ -343,6 +357,7 @@ export default function Home(){
         const cluster:[[number,number,number,number],[number,number,number,number],[number,number,number,number],[number,number,number,number]]=[[0,0,1.3,-.08],[-1.04,.17,.8,-.3],[.94,-.1,.73,-.34],[.28,.65,.58,-.4]];
         cluster.forEach(([x,z,size,y],index)=>{const rock=new THREE.Mesh(makeReefRockGeometry(index+Math.random()*9),obstacleRockMats[index%obstacleRockMats.length]);rock.position.set(x,y,z);rock.scale.set(size*(1+Math.random()*.12),size*(.86+Math.random()*.12),size*(.93+Math.random()*.14));rock.rotation.set((Math.random()-.5)*.16,(Math.random()-.5)*.58,(Math.random()-.5)*.13);rock.castShadow=true;rock.receiveShadow=true;g.add(rock)});
         for(let patch=0;patch<7;patch++){const angle=patch/7*Math.PI*2+Math.random()*.24,foam=new THREE.Mesh(new THREE.CircleGeometry(.28+Math.random()*.23,12),obstacleFoamMat);foam.rotation.x=-Math.PI/2;foam.position.set(Math.cos(angle)*(1.27+Math.random()*.26),-.54,Math.sin(angle)*(.88+Math.random()*.22));foam.scale.x=1.55+Math.random()*.72;foam.renderOrder=3;g.add(foam)}
+        g.scale.setScalar(1.1);
       }
       const objectLane=lane??(Math.random()-.5)*15;g.position.set(objectLane,kind==="jamo"?2.2:.65,-82-Math.random()*15);scene.add(g);objects.current.push({mesh:g,kind,char,hit:false});return objectLane;
     };
@@ -350,7 +365,7 @@ export default function Home(){
     const onKey=(e:KeyboardEvent,d:boolean)=>{if(["ArrowLeft","ArrowRight","a","d","A","D"," "].includes(e.key))e.preventDefault();if(e.key==="ArrowLeft"||e.key.toLowerCase()==="a")keys.current.left=d;if(e.key==="ArrowRight"||e.key.toLowerCase()==="d")keys.current.right=d;if(e.key===" "&&d){game.current.running=!game.current.running;sync()}};
     const kd=(e:KeyboardEvent)=>onKey(e,true),ku=(e:KeyboardEvent)=>onKey(e,false);window.addEventListener("resize",onResize);window.addEventListener("keydown",kd,{passive:false});window.addEventListener("keyup",ku);
     const loop=(now:number)=>{const dt=Math.min(2,(now-last)/16.67);last=now;const t=now*.001,s=game.current;oceanMat.uniforms.uTime.value=t;floorMat.uniforms.uTime.value=t;skyMat.uniforms.uTime.value=t;shoreFoamMat.uniforms.uTime.value=t;fish.forEach((f,i)=>{f.position.x+=Math.sin(i)*.012*dt;f.position.z+=.018*dt;if(f.position.z>10)f.position.z=-80;f.position.y+=Math.sin(t*1.2+i)*.002});
-      if(s.running&&s.health>0){
+      if(s.running&&s.health>0&&playerRef.current){
         if(keys.current.left)s.x-=.105*dt;if(keys.current.right)s.x+=.105*dt;s.x=Math.max(-7.5,Math.min(7.5,s.x));spawn-=dt;
         if(spawn<=0){
           const m=MISSIONS[s.mission%MISSIONS.length],need=m.pieces[s.collected.length];
@@ -371,7 +386,7 @@ export default function Home(){
         }
         const travel=s.speed*dt;scenery.forEach(item=>{item.position.z+=travel*(item.userData.recycleSpan?1:.9);const limit=item.userData.recycleAt??(item.userData.recycleSpan?34:16);if(item.position.z>limit)item.position.z-=item.userData.recycleSpan??115;if(item.userData.bob!==undefined){item.position.y=Math.sin(t*1.8+item.userData.bob)*.13;item.rotation.z=Math.sin(t*1.35+item.userData.bob)*.045}});
         objects.current.forEach(o=>{if(o.reject!==undefined&&o.velocity){o.mesh.position.addScaledVector(o.velocity,dt);o.velocity.y-=.006*dt;o.mesh.rotation.z+=.16*dt;o.mesh.rotation.y+=.11*dt;o.reject-=.018*dt;const sprite=o.mesh.children[0] as THREE.Sprite;if(sprite?.material)(sprite.material as THREE.SpriteMaterial).opacity=Math.max(0,o.reject);return}o.mesh.position.z+=travel;o.mesh.rotation.y+=o.kind==="jamo"?.012*dt:.003*dt;if(o.kind==="jamo")o.mesh.position.y=2.25+Math.sin(t*2+o.mesh.id)*.25;
-          if(!o.hit&&o.mesh.position.z>3&&o.mesh.position.z<7){const range=o.kind==="jamo"?1.65:1.28;if(Math.abs(o.mesh.position.x-s.x)<range){o.hit=true;if(o.kind==="rock"){s.health--;s.streak=0;impactKick=1;impactAge=0;setImpactFx(v=>v+1);if(!s.muted)sound("hit");sync(s.health?"암초에 닿았어요. 방향을 살짝 바꿔볼까요?":"잠시 쉬었다 다시 출항해요.");}
+          if(!o.hit&&o.mesh.position.z>3&&o.mesh.position.z<7){const range=o.kind==="jamo"?1.65:1.4;if(Math.abs(o.mesh.position.x-s.x)<range){o.hit=true;if(o.kind==="rock"){s.health--;s.streak=0;impactKick=1;impactAge=0;setImpactFx(v=>v+1);if(!s.muted)sound("hit");sync(s.health?"암초에 닿았어요. 방향을 살짝 바꿔볼까요?":"잠시 쉬었다 다시 출항해요.");}
             else{const m=MISSIONS[s.mission%MISSIONS.length],need=m.pieces[s.collected.length];if(o.char===need){const targetIndex=s.collected.length;launchGlyph(o.char,targetIndex,o.mesh.getWorldPosition(new THREE.Vector3()),camera,host);scene.remove(o.mesh);s.collected.push(o.char);s.score+=100;s.streak++;if(!s.muted)sound("collect");if(s.collected.length===m.pieces.length){const finishedMission=s.mission;s.score+=500;if(!s.muted){sound("complete");const voice=new SpeechSynthesisUtterance(m.word);voice.lang="ko-KR";voice.rate=.78;window.speechSynthesis.cancel();window.speechSynthesis.speak(voice)}sync(`“${m.word}” 완성! 별을 하나 얻었어요!`);setTimeout(()=>{s.collected=[];if(finishedMission===MISSIONS.length-1){s.completed=true;s.running=false;sync("오늘의 글자 항해를 모두 마쳤어요!")}else{s.mission=finishedMission+1;sync(`새로운 단어를 만나러 가요! ${finishedMission+2}/${MISSIONS.length}`)}},1050)}else sync(`${o.char} 획득! 다음은 ${m.pieces[s.collected.length]} 차례예요.`)}else{const away=Math.sign(o.mesh.position.x-boat.position.x)||1;o.reject=1;o.velocity=new THREE.Vector3(away*.13,.12,.1);setMistakeFx({id:Date.now(),char:o.char,need});sync(`${o.char}은(는) 순서가 달라요. 다음 차례는 ${need}이에요.`)}}}}});
         const gone=objects.current.filter(o=>o.mesh.position.z>18||(o.hit&&o.reject===undefined)||(o.reject!==undefined&&o.reject<=0));gone.filter(o=>o.mesh.parent).forEach(o=>scene.remove(o.mesh));objects.current=objects.current.filter(o=>!gone.includes(o));
       }
@@ -384,22 +399,57 @@ export default function Home(){
     return()=>{cancelAnimationFrame(raf);window.removeEventListener("resize",onResize);window.removeEventListener("keydown",kd);window.removeEventListener("keyup",ku);renderer.dispose();host.removeChild(renderer.domElement)};
   },[sound,sync,launchGlyph]);
 
+  const resetVoyage=(running:boolean,toast:string)=>{
+    keys.current={left:false,right:false};
+    objects.current.forEach(o=>o.mesh.parent?.remove(o.mesh));
+    objects.current=[];
+    const next=initialState();next.running=running;game.current=next;sync(toast);
+  };
+  const beginVoyage=async(event:React.FormEvent<HTMLFormElement>)=>{
+    event.preventDefault();const clean=nicknameInput.trim().replace(/\s+/g," "),length=Array.from(clean).length;
+    if(length<1||length>12||!/^[\p{L}\p{N}_ -]+$/u.test(clean)){setLoginError("닉네임은 한글·영문·숫자로 1~12자까지 입력해 주세요.");return}
+    setLoginBusy(true);setLoginError("");
+    try{
+      const response=await fetch(`/api/scores?nickname=${encodeURIComponent(clean)}`);if(!response.ok)throw new Error();
+      const data=await response.json();setBestScore(data.player?.best_score??0);playerRef.current=clean;setNickname(clean);resetVoyage(true,`${clean} 항해자님, 글자바다에 오신 것을 환영해요!`);
+    }catch{setLoginError("점수 기록소에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.")}
+    finally{setLoginBusy(false)}
+  };
   const mission=MISSIONS[ui.mission%MISSIONS.length];const hold=(side:"left"|"right",on:boolean)=>{keys.current[side]=on};
-  const restart=()=>{objects.current.forEach(o=>o.mesh.parent?.remove(o.mesh));objects.current=[];game.current=initialState();sync("천천히 다시 출항해 볼까요?")};
+  const restart=()=>resetVoyage(true,"천천히 다시 출항해 볼까요?");
+  const returnToStart=()=>{
+    resetVoyage(false,"닉네임을 입력하면 새로운 항해가 시작됩니다.");
+    playerRef.current=null;setNickname(null);setNicknameInput("");setBestScore(0);setLoginError("");
+  };
   return <main className="game-shell">
     <div ref={mount} className="three-stage" aria-label="자모를 모으며 항해하는 실제 3D 바다 게임"/>
     <div className="vignette"/>
+    {!nickname&&<section className="login-gate" aria-labelledby="login-title">
+      <div className="login-panel">
+        <div className="login-photo"><img src="/login-voyage-clean.png" alt="노을진 바다를 항해하는 배"/></div>
+        <form className="login-form" onSubmit={beginVoyage}>
+          <div className="login-kicker">나만의 항해 기록을 시작해요</div>
+          <h1 id="login-title">글자바다에<br/>오신 것을<br/>환영합니다.</h1>
+          <p>닉네임을 입력하면 바로 출항해요.<br/>게임에서 얻은 최고 점수는 닉네임별로 기록됩니다.</p>
+          <label htmlFor="nickname">항해자 닉네임</label>
+          <div className="nickname-field"><input id="nickname" value={nicknameInput} onChange={event=>setNicknameInput(event.currentTarget.value)} maxLength={12} autoComplete="off" autoFocus placeholder="예: 바다별" aria-describedby={loginError?"login-error":undefined}/><span>{Array.from(nicknameInput).length}/12</span></div>
+          {loginError&&<div id="login-error" className="login-error" role="alert">{loginError}</div>}
+          <button type="submit" disabled={loginBusy}>{loginBusy?"기록을 불러오는 중...":"항해 시작하기 →"}</button>
+        </form>
+      </div>
+    </section>}
+    {nickname&&<div className="player-badge"><span>항해자</span><b>{nickname}</b><small>최고 {Math.max(bestScore,ui.score).toLocaleString()}점</small></div>}
     {!audioReady&&!ui.muted&&<button className="audio-cue" onClick={()=>startAudio.current()}><span>♪</span> 음악과 파도 소리 시작하기</button>}
     {impactFx>0&&<div key={`soft-impact-${impactFx}`} className="soft-impact"><i/><i/><i/><i/></div>}
     {mistakeFx&&<div key={mistakeFx.id} className="gentle-mistake"><b>{mistakeFx.char}</b><span>순서가 달라요 · 다음은 {mistakeFx.need}</span></div>}
-    <header className="topbar"><div className="brand"><span className="brand-mark">ㅂ</span><div><b>글자바다</b><small>JAMO VOYAGE</small></div></div><div className="stats"><span><i>점수</i><b>{ui.score.toLocaleString()}</b></span><span><i>연속 성공</i><b>× {ui.streak}</b></span><span className="hearts" aria-label={`남은 기회 ${ui.health}개`}>{[0,1,2,3,4].map(n=><b key={n} className={n<ui.health?"on":""}>♥</b>)}</span></div><button className="sound" onClick={()=>{game.current.muted=!game.current.muted;sync()}}>{ui.muted?"소리 끔":"♪ 소리 켬"}</button></header>
+    <header className="topbar"><div className="brand"><span className="brand-mark">ㅂ</span><div><b>글자바다</b><small>JAMO VOYAGE</small></div></div><div className="stats"><span><i>점수</i><b>{ui.score.toLocaleString()}</b></span><span><i>연속 성공</i><b>× {ui.streak}</b></span><span className="hearts" aria-label={`남은 기회 ${ui.health}개`}>{[0,1,2,3,4].map(n=><b key={n} className={n<ui.health?"on":""}>♥</b>)}</span></div><div className="topbar-actions"><button className="home-return" onClick={returnToStart} aria-label="첫 화면으로 돌아가기"><span>↩</span><b>첫 화면</b></button><button className="sound" onClick={()=>{game.current.muted=!game.current.muted;sync()}}>{ui.muted?"소리 끔":"♪ 소리 켬"}</button></div></header>
     <section className="mission-card"><div className="mission-progress"><i style={{width:`${ui.collected.length/mission.pieces.length*100}%`}}/></div><div className="mission-kicker"><span>오늘의 항해 · {ui.mission+1}/{MISSIONS.length}번째 단어</span><span className="voyage-stars" aria-label={`완성한 단어 ${ui.mission}개`}>{MISSIONS.map((_,i)=><i key={i} className={i<ui.mission?"earned":""}>★</i>)}</span></div><div className="mission-row"><div><h1>{mission.word}</h1><p>{mission.hint}</p></div><div className="slots">{mission.pieces.map((p,i)=><span data-slot={i} key={i} className={i<ui.collected.length?"filled":i===ui.collected.length?"next":""}>{i<ui.collected.length?ui.collected[i]:p}</span>)}</div></div><div className="next-guide">다음에 모을 자모 <strong>{mission.pieces[ui.collected.length]}</strong></div></section>
     <aside className="teacher-panel"><span>편안한 항해</span><label>속도<select aria-label="항해 속도" value={String(ui.speed)} onChange={e=>{const speed=parseFloat(e.currentTarget.value);game.current.speed=speed;sync(speed===.055?"아주 천천히 항해합니다.":speed===.097?"천천히 항해합니다.":speed===.169?"보통 속도로 항해합니다.":speed===.29?"빠르게 항해합니다!":"아주 빠르게 항해합니다!")}}><option value="0.055">아주 천천히</option><option value="0.097">천천히</option><option value="0.169">보통</option><option value="0.29">빠르게</option><option value="0.46">아주 빠르게</option></select></label><b className="speed-now">{ui.speed===.055?"거북이 속도":ui.speed===.097?"산책 속도":ui.speed===.169?"씽씽 속도":ui.speed===.29?"쾌속 항해":"번개 항해"}</b><small>틀려도 감점하지 않아요</small></aside>
     <div className="toast" role="status">{ui.toast}</div>
     <div className="fx-layer">{flights.map(f=><span key={f.id} className="flying-glyph" style={{"--sx":`${f.sx}px`,"--sy":`${f.sy}px`,"--tx":`${f.tx}px`,"--ty":`${f.ty}px`} as React.CSSProperties} onAnimationEnd={()=>setFlights(v=>v.filter(x=>x.id!==f.id))}>{f.char}<i/><i/><i/><i/><i/><i/></span>)}</div>
     <div className="controls"><button onPointerDown={()=>hold("left",true)} onPointerUp={()=>hold("left",false)} onPointerCancel={()=>hold("left",false)} aria-label="왼쪽으로 이동"><span>←</span><small>왼쪽</small></button><button className="pause" onClick={()=>{game.current.running=!game.current.running;sync(game.current.running?"다시 천천히 출항합니다.":"잠시 쉬어가도 괜찮아요.")}}>{ui.running?"Ⅱ":"▶"}<small>{ui.running?"쉬기":"계속"}</small></button><button onPointerDown={()=>hold("right",true)} onPointerUp={()=>hold("right",false)} onPointerCancel={()=>hold("right",false)} aria-label="오른쪽으로 이동"><span>→</span><small>오른쪽</small></button></div>
-    {!ui.running&&ui.health>0&&!ui.completed&&<div className="overlay"><div><span>⚓</span><h2>잠시 쉬는 중</h2><p>준비되면 다시 시작해요. 서두르지 않아도 괜찮습니다.</p><button onClick={()=>{game.current.running=true;sync("다시 천천히 출항합니다.")}}>계속 항해하기</button></div></div>}
-    {ui.completed&&<div className="overlay voyage-complete"><div><span>★★★★★</span><h2>오늘의 글자 항해 완료!</h2><p>다섯 단어를 모두 완성했어요.<br/><b>{ui.score.toLocaleString()}점</b> · 최고 연속 성공 <b>{ui.streak}회</b></p><button onClick={restart}>다시 항해하기</button></div></div>}
-    {ui.health<=0&&<div className="overlay"><div><span>🌊</span><h2>멋진 항해였어요</h2><p><b>{ui.score.toLocaleString()}점</b>을 모았어요. 다시 도전해 볼까요?</p><button onClick={restart}>다시 출항하기</button></div></div>}
+    {!ui.running&&ui.health>0&&!ui.completed&&<div className="overlay"><div><span>⚓</span><h2>잠시 쉬는 중</h2><p>준비되면 다시 시작해요. 서두르지 않아도 괜찮습니다.</p><div className="overlay-actions"><button onClick={()=>{game.current.running=true;sync("다시 천천히 출항합니다.")}}>계속 항해하기</button><button className="overlay-home" onClick={returnToStart}>첫 화면으로</button></div></div></div>}
+    {ui.completed&&<div className="overlay voyage-complete"><div><span>★★★★★</span><h2>오늘의 글자 항해 완료!</h2><p>다섯 단어를 모두 완성했어요.<br/><b>{ui.score.toLocaleString()}점</b> · 최고 연속 성공 <b>{ui.streak}회</b></p><div className="overlay-actions"><button onClick={restart}>다시 항해하기</button><button className="overlay-home" onClick={returnToStart}>첫 화면으로</button></div></div></div>}
+    {ui.health<=0&&<div className="overlay"><div><span>🌊</span><h2>멋진 항해였어요</h2><p><b>{ui.score.toLocaleString()}점</b>을 모았어요. 다시 도전해 볼까요?</p><div className="overlay-actions"><button onClick={restart}>다시 출항하기</button><button className="overlay-home" onClick={returnToStart}>첫 화면으로</button></div></div></div>}
   </main>
 }
