@@ -15,7 +15,7 @@ const MISSIONS = [
 type GameObject = { mesh: THREE.Group; kind: "jamo" | "rock"; char: string; hit: boolean; reject?: number; velocity?: THREE.Vector3 };
 type GameState = { x: number; health: number; score: number; streak: number; mission: number; collected: string[]; running: boolean; muted: boolean; speed: number; completed: boolean };
 type Flight = { id: number; char: string; sx: number; sy: number; tx: number; ty: number };
-const initialState = (): GameState => ({ x: 0, health: 5, score: 0, streak: 0, mission: 0, collected: [], running: true, muted: false, speed: 0.097, completed: false });
+const initialState = (): GameState => ({ x: 0, health: 5, score: 0, streak: 0, mission: 0, collected: [], running: true, muted: false, speed: 0.46, completed: false });
 
 function makeJamoTexture(char: string) {
   const c = document.createElement("canvas"); c.width = c.height = 256;
